@@ -65,7 +65,7 @@ The settings are saved to `PETSKEY.CFG` on the disk the program was loaded from.
 
 **Later runs** connect straight away with the saved settings. If there is no connection within 15 seconds, or the modem answers NO ANSWER, BUSY or ERROR, the program shows the settings again. RUN/STOP cancels a dial in progress.
 
-**While connected**, the keyboard belongs to the Pi. The top of the screen shows where it is connected and the last message from the host (the Pi sends "Linked to *hostname*"). **RUN/STOP + RESTORE** hangs up and returns to BASIC. If the connection drops, the program tries again, then shows the settings.
+**While connected**, the keyboard belongs to the Pi. The top of the screen shows where it is connected and the last line of text from the host. The host sends "Linked to *hostname*." when the C64 connects; change it with `--greeting`, for example `--greeting "Typing into {hostname}"` (`{hostname}` and `{machine}` are filled in, at most 76 characters, `--greeting ""` for none). **RUN/STOP + RESTORE** hangs up and returns to BASIC. If the connection drops, the program tries again, then shows the settings.
 
 If the C64 is reset or switched off while a key is down, the Pi releases every key after 3 seconds without a heartbeat and closes the connection after 15 seconds.
 

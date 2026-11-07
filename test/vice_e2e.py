@@ -102,7 +102,8 @@ def main():
     try:
         spawn(['Xvfb', DISPLAY, '-screen', '0', '1024x768x24'], os.path.join(out, 'xvfb.log'))
         spawn([sys.executable, '-u', os.path.join(ROOT, 'pi', 'netkbd_host.py'), '--dry-run',
-               '--port', str(HOST_PORT), '--bind', '127.0.0.1'], host_log)
+               '--port', str(HOST_PORT), '--bind', '127.0.0.1',
+               '--greeting', 'Typing into {hostname} ({machine})'], host_log)
         spawn([sys.executable, '-u', os.path.join(ROOT, 'test', 'mock_modem.py'),
                '--listen', str(MODEM_PORT), '--gateway', '127.0.0.1'], modem_log)
         time.sleep(1.5)

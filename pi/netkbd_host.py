@@ -595,6 +595,18 @@ def to_petscii(text):
     return bytes(out)
 
 
+GREETING_MAX = 76           # what fits on the C64's status line
+
+
+def greeting_text(template, machine='c64'):
+    """The line shown on the C64 after it connects; '' for none."""
+    try:
+        text = template.format(hostname=socket.gethostname(), machine=machine.upper())
+    except (KeyError, IndexError, ValueError) as e:
+        raise SystemExit(f'--greeting {template!r}: {e} (placeholders are {{hostname}} and {{machine}})')
+    return ' '.join(text.split())[:GREETING_MAX]
+
+
 def parse_allow(values):
     nets = []
     for value in values:
@@ -643,8 +655,11 @@ def serve(args, keyboard):
 
     def greet(sock):
         def on_hello(machine):
+            text = greeting_text(args.greeting, machine)
+            if not text:
+                return
             try:
-                sock.sendall(to_petscii(f'Linked to {socket.gethostname()}.\n'))
+                sock.sendall(to_petscii(text + '\n'))
             except OSError:
                 pass
         return on_hello
@@ -716,6 +731,9 @@ def main(argv=None):
     p.add_argument('--keymap', action='append', default=[], metavar='FILE',
                    help='keymap file applied on top of the built-in one (repeatable)')
     p.add_argument('--name', default='Commodore PETSKEY Remote', help='input device name')
+    p.add_argument('--greeting', default='Linked to {hostname}.', metavar='TEXT',
+                   help='line shown on the C64 once connected; {hostname} and {machine} are '
+                        'filled in, "" shows nothing (default: "Linked to {hostname}.")')
     p.add_argument('--timeout', type=float, default=15, help='drop a silent connection after this many seconds')
     p.add_argument('--dry-run', action='store_true', help='print key events instead of creating a uinput device')
     p.add_argument('--verbose', action='store_true', help='print the raw bytes received')
@@ -747,6 +765,7 @@ def main(argv=None):
             print('Linux keys (KEY_ prefix optional):', ' '.join(LINUX_KEYS))
             return
         build_keymap('c64', args.layout, args.keymap)   # report keymap errors before listening
+        greeting_text(args.greeting)                     # and greeting errors
     except KeymapError as e:
         raise SystemExit(f'error: {e}')
 

@@ -143,5 +143,17 @@ class KeymapUploadTest(unittest.TestCase):
         self.assertEqual(events, [('B', 1), ('B', 0)])
 
 
+class GreetingTest(unittest.TestCase):
+    def test_greeting(self):
+        import socket
+        name = socket.gethostname()
+        self.assertEqual(h.greeting_text('Linked to {hostname}.'), f'Linked to {name}.')
+        self.assertEqual(h.greeting_text('{machine} on  the\tdesk', 'c128'), 'C128 on the desk')
+        self.assertEqual(h.greeting_text(''), '')
+        self.assertEqual(len(h.greeting_text('x' * 200)), h.GREETING_MAX)
+        with self.assertRaises(SystemExit):
+            h.greeting_text('{nope}')
+
+
 if __name__ == '__main__':
     unittest.main()
