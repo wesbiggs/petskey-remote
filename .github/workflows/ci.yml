@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # the version shown on screen comes from git describe
+
+      - name: Install ACME
+        run: sudo apt-get update && sudo apt-get install -y acme
+
+      - name: Unit tests
+        run: make test
+
+      - name: Build the .prg and .d64
+        run: make
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: petskey-remote-${{ github.sha }}
+          path: |
+            build/petskey-remote.d64
+            build/petskey-remote.prg
+            pi/netkbd_host.py
+            pi/netkbd.service
+          if-no-files-found: error

@@ -1,0 +1,16 @@
+# PETSKEY Remote host: a C64 running PETSKEY REMOTE becomes a keyboard for this machine.
+# Install: copy to /etc/systemd/system/, set the address below to this machine's
+# address on the C64 (wired) side, then: sudo systemctl enable --now netkbd
+[Unit]
+Description=PETSKEY Remote: C64/C128 keyboard over the network
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStartPre=-/sbin/modprobe uinput
+ExecStart=/usr/bin/python3 -u /usr/local/bin/netkbd_host.py --bind 192.168.7.1 --allow 192.168.7.0/24
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

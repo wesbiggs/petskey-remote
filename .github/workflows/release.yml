@@ -1,0 +1,44 @@
+name: Release
+
+# Push a tag like v1.2.0 to build and publish a release.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install ACME
+        run: sudo apt-get update && sudo apt-get install -y acme
+
+      - name: Unit tests
+        run: make test
+
+      - name: Build
+        env:
+          PETSKEY_VERSION: ${{ github.ref_name }}
+        run: make
+
+      - name: Package
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir dist
+          cp build/petskey-remote.d64 "dist/petskey-remote-$TAG.d64"
+          cp build/petskey-remote.prg "dist/petskey-remote-$TAG.prg"
+          cp pi/netkbd_host.py pi/netkbd.service dist/
+          (cd dist && sha256sum * > SHA256SUMS)
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" dist/* --verify-tag --title "PETSKEY Remote $TAG" --generate-notes
