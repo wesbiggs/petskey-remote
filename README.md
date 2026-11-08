@@ -25,6 +25,8 @@ The C64 sends raw key positions, not PETSCII, so every key can be held, released
 - A Linux machine with `/dev/uinput` and Python 3 (a Raspberry Pi here). Nothing to pip install.
 - A wired link between the two. The examples assume the Pi is the TeensyROM's gateway on 192.168.7.x.
 
+A proposal for doing without the Pi, with the TeensyROM itself acting as a USB keyboard for a PC or a MiSTer, is in [docs/USB-KEYBOARD.md](docs/USB-KEYBOARD.md).
+
 ## Getting it
 
 Download `petskey-remote-<version>.d64`, `netkbd_host.py` and `netkbd.service` from the [latest release](https://github.com/wesbiggs/petskey-remote/releases/latest), or build them yourself (see "Building and testing").
