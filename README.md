@@ -18,6 +18,17 @@ While it runs, the C64 shows its own keyboard with what every key does on the Li
 
 The C64 sends raw key positions, not PETSCII, so every key can be held, released and combined with other keys: Ctrl+C, Alt+Tab, Shift+arrows and so on.
 
+## What you need
+
+- A C64, or a C128 (it runs in 64 mode and still reads the C128's extra keys)
+- A TeensyROM with Ethernet, acting as a SwiftLink modem at `$DE00`, plus somewhere to keep the settings: the TeensyROM's own vdrive, or a real IEC drive, SD2IEC or Pi1541
+- A Linux machine with `/dev/uinput` and Python 3 (a Raspberry Pi here). Nothing to pip install.
+- A wired link between the two. The examples assume the Pi is the TeensyROM's gateway on 192.168.7.x.
+
+## Getting it
+
+Download `petskey-remote-<version>.d64`, `netkbd_host.py` and `netkbd.service` from the [latest release](https://github.com/wesbiggs/petskey-remote/releases/latest), or build them yourself (see "Building and testing").
+
 ## Setup on the Pi
 
 1. Copy `pi/netkbd_host.py` to the Pi, for example to `/usr/local/bin/netkbd_host.py`, and make it executable.
