@@ -1,7 +1,20 @@
 # Design note: the TeensyROM as a USB keyboard
 
-Status: proposal, nothing built. Suggested by juararob: plug the TeensyROM straight into a PC or a MiSTer and
-use the C64 as a real keyboard there, with no Pi and no network.
+Status: built, host-tested only, not yet tried on hardware. The firmware is on the `claude/brave-hypatia-ljyd94`
+branch of [wesbiggs/TeensyROM](https://github.com/wesbiggs/TeensyROM) (`docs/USB_Keyboard.md` there has the
+usage); the key code table comes from `tools/hid_keytable.py` here. Suggested by juararob: plug the TeensyROM
+straight into a PC or a MiSTer and use the C64 as a real keyboard there, with no host process and no network.
+
+What changed from the proposal below, once built:
+
+* The core patch goes into `build-firmware.mjs`'s private copy of the core (`tools/lib/usb-keyboard.mjs`,
+  flag `--usb-keyboard`), not the installed core. MinimalBoot gets the same USB type, so the board stays one
+  device. The product ID is 0x048D, unassigned in Teensyduino 1.60-1.62 but not allocated by PJRC.
+* Teensyduino's boot report declares key usages up to 0x7F only, so RO, KPCOMMA and the volume keys are
+  left out of the table. Of the stock keymaps, only the positional layout's `=` (on RO) is affected.
+* Protocol 2 is required. Keys before the keymap arrives are dropped, and a new hello needs the keymap again.
+* A seventh key held at once gets no slot and isn't resent when one frees up, as on a 6KRO keyboard.
+* `ATDT USB:0` and quoted names work too. The session state is malloc'd on `ATDT USB` and freed on hang-up.
 
 ```
  C64/C128 keyboard ──► PETSKEY REMOTE ──► SwiftLink at $DE00 ──► TeensyROM: protocol + keymap ──► USB HID keyboard ──► PC / MiSTer
@@ -142,7 +155,7 @@ Everything runs from the main loop (the SwiftLink polling handler), never from t
   the modem's `atc` reply shows no network.
 * No host-side software. The keymap compiler (`--compile-keymap`) still makes the `.K64`/`.K128` files.
 
-## Behavior differences from the Pi host
+## Behavior differences from the host process
 
 * **Keyboard layout:** HID sends key positions, so the host's layout setting matters just as it does with
   uinput. The default keymap assumes a US layout; a MiSTer core or a PC set to another layout will give
