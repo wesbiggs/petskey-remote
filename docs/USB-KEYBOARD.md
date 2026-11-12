@@ -114,7 +114,7 @@ never a TCP port) is an alternative.
 
 New file next to `USBMouse.c`, about 300 lines:
 
-* **Parser**, as `Session._byte()` in `pi/netkbd_host.py`: `$F0` hello (version, flags), `$F1` keymap (length,
+* **Parser**, as `Session._byte()` in `host/netkbd_host.py`: `$F0` hello (version, flags), `$F1` keymap (length,
   then 90 × 4 bytes, so a 360-byte buffer), `$00`–`$5F` down, `$80`–`$DF` up, `$FE` heartbeat, `$FC` bye.
   Anything before a hello is ignored, as now (the modem's echo of the dial command).
 * **Translator**, as `Translator` there: the SHIFT state, per-key overrides that force SHIFT on or off,

@@ -26,7 +26,7 @@ build/petskey-remote.d64: build/petskey-remote.prg $(GEN)
 		c64/gen/PETSKEY.K64 c64/gen/PETSKEY.K128
 
 test:
-	$(PYTHON) -m unittest discover -s pi
+	$(PYTHON) -m unittest discover -s host
 	$(PYTHON) -m unittest discover -s tools
 
 # End-to-end in VICE (needs x64sc/x128 with ROMs, Xvfb, xdotool, ImageMagick)

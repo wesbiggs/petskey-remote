@@ -16,7 +16,7 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, '..', 'pi'))
+sys.path.insert(0, os.path.join(HERE, '..', 'host'))
 import netkbd_host as host  # noqa: E402
 
 C = host.C64_CODES

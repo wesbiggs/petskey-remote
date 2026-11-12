@@ -31,6 +31,8 @@ jobs:
           path: |
             build/petskey-remote.d64
             build/petskey-remote.prg
-            pi/netkbd_host.py
-            pi/netkbd.service
+            host/netkbd_host.py
+            host/netkbd.service
+            host/netkbd.plist
+            host/macos.map
           if-no-files-found: error

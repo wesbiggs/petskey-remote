@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# python3 -m unittest discover -s pi
+# python3 -m unittest discover -s host
 import os
 import tempfile
 import unittest
@@ -141,6 +141,137 @@ class KeymapUploadTest(unittest.TestCase):
                + bytes([C['A'], C['A'] | 0x80]))
         self.assertEqual(got, [False, True])
         self.assertEqual(events, [('B', 1), ('B', 0)])
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = 100.0
+
+    def __call__(self):
+        return self.now
+
+
+def mac(repeat_rate=25.0):
+    """A MacKeyboard that records (vk, kind, flags, autorepeat) instead of posting."""
+    posted, clock = [], FakeClock()
+    kb = h.MacKeyboard(post=lambda vk, kind, flags, autorepeat=False:
+                       posted.append((vk, kind, flags, autorepeat)),
+                       repeat_delay=0.5, repeat_rate=repeat_rate, clock=clock, log=lambda m: None)
+    return kb, posted, clock
+
+
+DOWN, UP, FLAGS = h.EVENT_KEY_DOWN, h.EVENT_KEY_UP, h.EVENT_FLAGS_CHANGED
+
+
+class MacKeyboardTest(unittest.TestCase):
+    def test_every_default_key_has_a_mac_key(self):
+        for machine in ('c64', 'c128'):
+            for layout in h.KEYMAP_LAYOUTS:
+                keymap = h.build_keymap(machine, layout, [os.path.join(os.path.dirname(__file__), 'macos.map')])
+                for table in ('plain', 'shift'):
+                    for code, (_, key) in keymap[table].items():
+                        if key is not None:
+                            self.assertIn(key, h.MAC_KEYCODES, (machine, layout, h.C64_KEYS[code]))
+
+    def test_letter_and_shift(self):
+        kb, posted, _ = mac()
+        for code, value in [(K['LEFTSHIFT'], 1), (K['A'], 1), (K['A'], 0), (K['LEFTSHIFT'], 0)]:
+            kb.key(code, value)
+        shift = h.FLAG_SHIFT | 0x02
+        self.assertEqual(posted, [(0x38, FLAGS, shift, False), (0x00, DOWN, shift, False),
+                                  (0x00, UP, shift, False), (0x38, FLAGS, 0, False)])
+
+    def test_alt_is_option_and_meta_is_command(self):
+        kb, posted, _ = mac()
+        kb.key(K['LEFTMETA'], 1)
+        kb.key(K['LEFTALT'], 1)
+        kb.key(K['C'], 1)
+        self.assertEqual(posted[-1], (0x08, DOWN, h.FLAG_CMD | 0x08 | h.FLAG_OPTION | 0x20, False))
+        kb.key(K['LEFTMETA'], 0)
+        self.assertEqual(posted[-1], (0x37, FLAGS, h.FLAG_OPTION | 0x20, False))
+
+    def test_both_shifts_keep_flag_until_last_release(self):
+        kb, posted, _ = mac()
+        kb.key(K['LEFTSHIFT'], 1)
+        kb.key(K['RIGHTSHIFT'], 1)
+        kb.key(K['LEFTSHIFT'], 0)
+        self.assertEqual(posted[-1][2], h.FLAG_SHIFT | 0x04)
+        kb.key(K['RIGHTSHIFT'], 0)
+        self.assertEqual(posted[-1][2], 0)
+
+    def test_arrow_and_keypad_flags(self):
+        kb, posted, _ = mac()
+        kb.key(K['UP'], 1)
+        kb.key(K['KP5'], 1)
+        kb.key(K['F1'], 1)
+        self.assertEqual([p[2] for p in posted], [h.FLAG_NUMPAD | h.FLAG_FN, h.FLAG_NUMPAD, h.FLAG_FN])
+
+    def test_caps_lock_toggles_on_press(self):
+        kb, posted, _ = mac()
+        kb.key(K['CAPSLOCK'], 1)
+        kb.key(K['CAPSLOCK'], 0)
+        kb.key(K['A'], 1)
+        self.assertEqual(posted, [(0x39, FLAGS, h.FLAG_CAPS, False), (0x00, DOWN, h.FLAG_CAPS, False)])
+        kb.key(K['CAPSLOCK'], 1)
+        self.assertEqual(posted[-1], (0x39, FLAGS, 0, False))
+
+    def test_unmapped_key_is_ignored(self):
+        kb, posted, _ = mac()
+        kb.key(K['MUTE'], 1)
+        kb.key(K['MUTE'], 0)
+        self.assertEqual(posted, [])
+
+    def test_key_repeat(self):
+        kb, posted, clock = mac()
+        self.assertIsNone(kb.next_timeout())
+        kb.key(K['A'], 1)
+        self.assertAlmostEqual(kb.next_timeout(), 0.5)
+        clock.now += 0.4
+        kb.tick()
+        self.assertEqual(len(posted), 1)
+        clock.now += 0.1
+        kb.tick()
+        self.assertEqual(posted[-1], (0x00, DOWN, 0, True))
+        self.assertAlmostEqual(kb.next_timeout(), 0.04)
+        clock.now += 5                       # the loop stalled: one repeat, not a burst
+        kb.tick()
+        kb.tick()
+        self.assertEqual(len(posted), 3)
+        self.assertAlmostEqual(kb.next_timeout(), 0.04)
+        kb.key(K['A'], 0)
+        self.assertIsNone(kb.next_timeout())
+
+    def test_modifier_does_not_repeat_or_stop_repeat(self):
+        kb, posted, clock = mac()
+        kb.key(K['LEFTSHIFT'], 1)
+        self.assertIsNone(kb.next_timeout())
+        kb.key(K['B'], 1)
+        kb.key(K['LEFTCTRL'], 1)
+        clock.now += 0.5
+        kb.tick()
+        self.assertEqual(posted[-1], (0x0B, DOWN, h.FLAG_SHIFT | 0x02 | h.FLAG_CTRL | 0x01, True))
+
+    def test_newest_key_repeats_and_no_repeat_option(self):
+        kb, posted, clock = mac()
+        kb.key(K['A'], 1)
+        kb.key(K['S'], 1)
+        kb.key(K['A'], 0)                    # releasing the older key keeps S repeating
+        clock.now += 0.5
+        kb.tick()
+        self.assertEqual(posted[-1][:2], (0x01, DOWN))
+        kb, posted, clock = mac(repeat_rate=0)
+        kb.key(K['A'], 1)
+        self.assertIsNone(kb.next_timeout())
+
+    def test_translator_drives_mac_keyboard(self):
+        kb, posted, _ = mac()
+        t = h.Translator(h.build_keymap('c64', 'symbolic'), kb.key)
+        t.key_down(C['RSHIFT'])
+        t.key_down(C['7'])                   # an apostrophe: shift lifted for it
+        self.assertEqual(posted[-1], (0x27, DOWN, 0, False))
+        t.release_all()
+        self.assertIsNone(kb.next_timeout())
+        self.assertEqual(kb.held, set())
 
 
 class GreetingTest(unittest.TestCase):

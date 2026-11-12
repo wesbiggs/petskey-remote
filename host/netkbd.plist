@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  PETSKEY Remote host on macOS, started when you log in. Set the python3 path, the
+  program's path and the addresses below, then:
+    cp netkbd.plist ~/Library/LaunchAgents/com.github.petskey-remote.netkbd.plist
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.github.petskey-remote.netkbd.plist
+  The python3 named here needs the Accessibility permission (see README.md).
+  Log: /tmp/netkbd.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.github.petskey-remote.netkbd</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/python3</string>
+        <string>-u</string>
+        <string>/usr/local/bin/netkbd_host.py</string>
+        <string>--bind</string>
+        <string>192.168.7.1</string>
+        <string>--allow</string>
+        <string>192.168.7.0/24</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <key>StandardOutPath</key>
+    <string>/tmp/netkbd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/netkbd.log</string>
+</dict>
+</plist>

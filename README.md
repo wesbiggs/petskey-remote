@@ -1,6 +1,6 @@
 # PETSKEY Remote
 
-PETSKEY Remote lets you use the keyboard of a C64, or a C128 in 64 mode, as the keyboard of a Linux machine over the network. The mouse and monitor stay on the Linux machine. The C64 keyboard acts as a real input device there: it drives the desktop session, the text console or the login screen the way a USB keyboard would. It is not a terminal.
+PETSKEY Remote lets you use the keyboard of a C64, or a C128 in 64 mode, as the keyboard of a Linux machine over the network, or of a Mac (see [Setup on a Mac](#setup-on-a-mac)). The mouse and monitor stay on the Linux machine. The C64 keyboard acts as a real input device there: it drives the desktop session, the text console or the login screen the way a USB keyboard would. It is not a terminal.
 
 ```
  C64/C128 keyboard ──► PETSKEY REMOTE ──► SwiftLink at $DE00 ──► TeensyROM Ethernet ──TCP──► netkbd_host.py ──► /dev/uinput ──► Linux session
@@ -14,7 +14,7 @@ While it runs, the C64 shows its own keyboard with what every key does on the Li
 | Part | Where | What it does |
 |---|---|---|
 | `c64/petskey.asm` → `build/petskey-remote.d64` | C64 | Scans the keyboard matrix about 120 times a second, sends each press and release of a physical key, and draws the keyboard. It dials the host with `ATDT host:port`. Its settings and keymap are files on the disk. |
-| `pi/netkbd_host.py` | Linux (a Raspberry Pi here) | Accepts the connection and types the keys on a virtual keyboard created through uinput, using the keymap the C64 sends. It uses only the Python 3 standard library. |
+| `host/netkbd_host.py` | Linux (a Raspberry Pi here), or macOS | Accepts the connection and types the keys on a virtual keyboard created through uinput, or through Quartz events on a Mac, using the keymap the C64 sends. It uses only the Python 3 standard library. |
 
 The C64 sends raw key positions, not PETSCII, so every key can be held, released and combined with other keys: Ctrl+C, Alt+Tab, Shift+arrows and so on.
 
@@ -33,7 +33,7 @@ Download `petskey-remote-<version>.d64`, `netkbd_host.py` and `netkbd.service` f
 
 ## Setup on the Pi
 
-1. Copy `pi/netkbd_host.py` to the Pi, for example to `/usr/local/bin/netkbd_host.py`, and make it executable.
+1. Copy `host/netkbd_host.py` to the Pi, for example to `/usr/local/bin/netkbd_host.py`, and make it executable.
 2. Try it without creating a keyboard. It only prints the key events:
    ```
    ./netkbd_host.py --dry-run
@@ -43,7 +43,7 @@ Download `petskey-remote-<version>.d64`, `netkbd_host.py` and `netkbd.service` f
    sudo ./netkbd_host.py --bind 192.168.7.1
    ```
    `--bind` takes the Pi's address on the wired side, the one the TeensyROM uses as its gateway. Binding to it keeps the port off your WiFi network. **Anyone who can connect to the port can type on the Pi**, so always use `--bind`, `--allow 192.168.7.0/24`, or both. If you use neither, the program prints a warning. The port is 6526, like the CIA chip; `--port` changes it.
-4. To start it at boot, copy `pi/netkbd.service` to `/etc/systemd/system/`, set the addresses in its `ExecStart` line, then run:
+4. To start it at boot, copy `host/netkbd.service` to `/etc/systemd/system/`, set the addresses in its `ExecStart` line, then run:
    ```
    sudo systemctl daemon-reload
    sudo systemctl enable --now netkbd
@@ -59,6 +59,39 @@ echo 'KERNEL=="uinput", GROUP="input", MODE="0660"' | sudo tee /etc/udev/rules.d
 sudo udevadm control --reload && sudo udevadm trigger /dev/uinput
 sudo usermod -aG input $USER     # then log in again
 ```
+
+## Setup on a Mac
+
+The same program runs on macOS, with the same options. Instead of creating a keyboard device it posts key events into your logged-in session, so it types into apps but not at the login window. It needs only the Python 3 that comes with the Xcode command line tools, or one from Homebrew.
+
+1. Try it with `--dry-run` as on the Pi.
+2. Run it for real:
+   ```
+   ./netkbd_host.py --bind 192.168.7.1 --allow 192.168.7.0/24
+   ```
+   The first time, it stops with "not allowed to control the computer". Open System Settings → Privacy & Security → **Accessibility**, turn on the app you ran it from (Terminal, iTerm…), and start it again. macOS discards synthetic key events from apps without this permission. Root doesn't help.
+3. Give the C64 a Mac keymap, so that C= is Command:
+   ```
+   host/netkbd_host.py --compile-keymap PETSKEY.K64  --machine c64  --keymap host/macos.map
+   host/netkbd_host.py --compile-keymap PETSKEY.K128 --machine c128 --keymap host/macos.map
+   ```
+   Copy both onto the disk as described under "Your own keymap". Without them C= is Option on a C64, and there is no Command key.
+4. To start it when you log in, edit the paths and addresses in `host/netkbd.plist`, then:
+   ```
+   cp host/netkbd.plist ~/Library/LaunchAgents/com.github.petskey-remote.netkbd.plist
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.github.petskey-remote.netkbd.plist
+   tail -f /tmp/netkbd.log
+   ```
+   Started this way, the program is not running inside Terminal, so the python3 named in the plist needs the Accessibility permission itself. Add it with the + button; in the file dialog, Cmd+Shift+G lets you type its path. Run `realpath $(which python3)` to find the actual binary. This step has not been tested yet.
+
+How the keys come out on a Mac:
+
+- Keymaps still name Linux keys. The Mac side turns Alt into Option and Meta (Super) into Command. Ctrl stays Control, so Linux shortcuts such as Ctrl+C become Cmd+C, with C= as Command.
+- The default keymap assumes the Mac uses the **U.S.** input source.
+- INST/DEL is Delete (backspace) and SHIFT+INST/DEL is forward delete. CLR/HOME is Home, which in most Mac apps goes to the top of the document, not the start of the line.
+- macOS doesn't repeat synthetic keys, so the program repeats a held key itself: after 0.5 seconds, 25 times a second. Change this with `--repeat-delay` and `--repeat-rate`, or turn it off with `--repeat-rate 0`.
+- The C128 CAPS LOCK capitalizes what the C64 types, but it doesn't change the Mac's own Caps Lock state or light.
+- Keys a Mac doesn't have (media keys, Menu, LINEFEED) are ignored and logged once. PrintScreen, Scroll Lock and Pause go to F13, F14 and F15, and Insert goes to Help, where Apple keyboards put them.
 
 ## Setup on the C64
 
@@ -132,7 +165,7 @@ F1 = NONE
 Then turn it into the keymap file for the disk, from a checkout of this repository:
 
 ```
-pi/netkbd_host.py --compile-keymap PETSKEY.K128 --machine c128 --keymap my.map
+host/netkbd_host.py --compile-keymap PETSKEY.K128 --machine c128 --keymap my.map
 ```
 
 Copy the result onto the disk, replacing the old file. On a TeensyROM, that means copying it into the `.d64` image, for example with VICE's `c1541`: `c1541 petskey-remote.d64 -delete petskey.k128 -write PETSKEY.K128 petskey.k128`.
@@ -149,6 +182,7 @@ A `SHIFT+` line sets the Linux shift state itself: `SHIFT+7 = KEY_APOSTROPHE` se
 - The C64 keyboard has no diodes. Some combinations of three or more keys produce ghost keys, as they would on the C64 itself.
 - RESTORE is not a matrix key. Only its press can be detected, so it always arrives as a tap and does not autorepeat.
 - The C64 and the Pi do not share the Caps Lock state.
+- On a Mac, the program types only into a logged-in session, and only once it has the Accessibility permission. It has been tested on a Mac with a C128; the LaunchAgent has not been tested yet.
 
 ## Protocol
 
@@ -193,7 +227,7 @@ Known gaps: the keypad keys of the C128 can't be pressed through Xvfb, so they a
 
 ### CI and releases
 
-GitHub Actions runs the unit tests and builds the `.prg` and `.d64` for every push to `main` and every pull request, and keeps them as a build artifact. Pushing a tag such as `v1.0.0` builds with that version and publishes a GitHub release with the `.d64`, the `.prg`, the host program, its systemd unit, and checksums.
+GitHub Actions runs the unit tests and builds the `.prg` and `.d64` for every push to `main` and every pull request, and keeps them as a build artifact. Pushing a tag such as `v1.0.0` builds with that version and publishes a GitHub release with the `.d64`, the `.prg`, the host program, its systemd unit, the macOS LaunchAgent and keymap, and checksums.
 
 ## How this was made
 

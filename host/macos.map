@@ -1,0 +1,10 @@
+# PETSKEY Remote keymap additions for a Mac host. Applied on top of the built-in keymap:
+#   ./netkbd_host.py --compile-keymap PETSKEY.K64  --machine c64  --keymap macos.map
+#   ./netkbd_host.py --compile-keymap PETSKEY.K128 --machine c128 --keymap macos.map
+# then put the files on the C64 disk, so the C64 sends this keymap and shows its legends.
+# The Mac host turns Linux Alt into Option and Linux Meta (Super) into Command.
+
+# C= is Command on both machines, for Cmd+C, Cmd+Tab and the like. The C64 has no
+# other key for Option; the C128 keeps its ALT key as Option.
+COMMODORE = LEFTMETA "Cmd"
+ALT = LEFTALT "Opt"

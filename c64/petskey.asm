@@ -4,7 +4,7 @@
 ; keyboard for a Linux machine. The program scans the keyboard matrix itself and
 ; sends every press and release of a physical key over a SwiftLink-style ACIA at
 ; $DE00 (the TeensyROM Ethernet modem, or any SwiftLink modem that dials with
-; ATDT host:port) to pi/netkbd_host.py, which types them on a uinput keyboard.
+; ATDT host:port) to host/netkbd_host.py, which types them on a uinput keyboard.
 ;
 ; While connected it shows a hi-res picture of the keyboard (a C64 or a C128 one)
 ; with what each key does on the Linux side; pressed keys light up, and holding

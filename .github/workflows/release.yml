@@ -34,7 +34,7 @@ jobs:
           mkdir dist
           cp build/petskey-remote.d64 "dist/petskey-remote-$TAG.d64"
           cp build/petskey-remote.prg "dist/petskey-remote-$TAG.prg"
-          cp pi/netkbd_host.py pi/netkbd.service dist/
+          cp host/netkbd_host.py host/netkbd.service host/netkbd.plist host/macos.map dist/
           (cd dist && sha256sum * > SHA256SUMS)
 
       - name: Publish the release

@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""PETSKEY Remote host: a Commodore 64/128 keyboard, over the network, as a Linux keyboard.
+"""PETSKEY Remote host: a Commodore 64/128 keyboard, over the network, as a Linux or macOS keyboard.
 
 PETSKEY REMOTE on the C64 dials this program (ATDT <host>:<port> through a SwiftLink /
 TeensyROM Ethernet modem) and sends one byte per key press or release. Each one is
 turned into a key event on a virtual keyboard created through /dev/uinput, so it
 drives whatever the Pi's console or desktop session is doing, exactly like a USB
-keyboard would. Pure Python 3 standard library: nothing to pip install.
+keyboard would. On macOS the events are posted through Quartz instead, into the
+logged-in session. Pure Python 3 standard library: nothing to pip install.
+
+Keymaps always name Linux key codes; the macOS backend translates them (Alt is Option,
+Meta/Super is Command).
 
   sudo ./netkbd_host.py --allow 192.168.7.0/24          run it
   ./netkbd_host.py --dry-run                            print the key events instead
@@ -548,7 +552,24 @@ UI_SET_KEYBIT = 0x40045565
 INPUT_EVENT = struct.Struct('llHHi')   # struct timeval is two native longs
 
 
-class UinputKeyboard:
+class Keyboard:
+    """What serve() needs from a keyboard backend. key() takes a Linux key code."""
+
+    def key(self, code, value):
+        raise NotImplementedError
+
+    def next_timeout(self):
+        """Seconds until tick() has work to do (key repeat), or None."""
+        return None
+
+    def tick(self):
+        pass
+
+    def close(self):
+        pass
+
+
+class UinputKeyboard(Keyboard):
     def __init__(self, name):
         self.fd = os.open('/dev/uinput', os.O_WRONLY | os.O_NONBLOCK)
         fcntl.ioctl(self.fd, UI_SET_EVBIT, EV_KEY)
@@ -570,12 +591,171 @@ class UinputKeyboard:
             os.close(self.fd)
 
 
-class PrintKeyboard:
+class PrintKeyboard(Keyboard):
     def key(self, code, value):
         print(f'  KEY_{LINUX_KEY_NAMES.get(code, code)} {"down" if value else "up"}', flush=True)
 
-    def close(self):
-        pass
+
+# ---------------------------------------------------------------------------
+# macOS: Quartz keyboard events, posted at the HID level as if from a real keyboard.
+# Linux key code -> macOS virtual key code (kVK_* in HIToolbox/Events.h). Keys a Mac has
+# no place for are left out; PC keyboards on a Mac put PrintScreen/ScrollLock/Pause on
+# F13/F14/F15, Insert on Help and NumLock on the keypad's Clear.
+MAC_KEYS = {
+    'A': 0x00, 'S': 0x01, 'D': 0x02, 'F': 0x03, 'H': 0x04, 'G': 0x05, 'Z': 0x06, 'X': 0x07,
+    'C': 0x08, 'V': 0x09, '102ND': 0x0A, 'B': 0x0B, 'Q': 0x0C, 'W': 0x0D, 'E': 0x0E, 'R': 0x0F,
+    'Y': 0x10, 'T': 0x11, '1': 0x12, '2': 0x13, '3': 0x14, '4': 0x15, '6': 0x16, '5': 0x17,
+    'EQUAL': 0x18, '9': 0x19, '7': 0x1A, 'MINUS': 0x1B, '8': 0x1C, '0': 0x1D,
+    'RIGHTBRACE': 0x1E, 'O': 0x1F, 'U': 0x20, 'LEFTBRACE': 0x21, 'I': 0x22, 'P': 0x23,
+    'ENTER': 0x24, 'L': 0x25, 'J': 0x26, 'APOSTROPHE': 0x27, 'K': 0x28, 'SEMICOLON': 0x29,
+    'BACKSLASH': 0x2A, 'COMMA': 0x2B, 'SLASH': 0x2C, 'N': 0x2D, 'M': 0x2E, 'DOT': 0x2F,
+    'TAB': 0x30, 'SPACE': 0x31, 'GRAVE': 0x32, 'BACKSPACE': 0x33, 'ESC': 0x35,
+    'RIGHTMETA': 0x36, 'LEFTMETA': 0x37, 'LEFTSHIFT': 0x38, 'CAPSLOCK': 0x39,
+    'LEFTALT': 0x3A, 'LEFTCTRL': 0x3B, 'RIGHTSHIFT': 0x3C, 'RIGHTALT': 0x3D, 'RIGHTCTRL': 0x3E,
+    'F17': 0x40, 'KPDOT': 0x41, 'KPASTERISK': 0x43, 'KPPLUS': 0x45, 'NUMLOCK': 0x47,
+    'KPSLASH': 0x4B, 'KPENTER': 0x4C, 'KPMINUS': 0x4E, 'F18': 0x4F, 'F19': 0x50,
+    'KPEQUAL': 0x51, 'KP0': 0x52, 'KP1': 0x53, 'KP2': 0x54, 'KP3': 0x55, 'KP4': 0x56,
+    'KP5': 0x57, 'KP6': 0x58, 'KP7': 0x59, 'F20': 0x5A, 'KP8': 0x5B, 'KP9': 0x5C,
+    'RO': 0x5E, 'KPCOMMA': 0x5F,
+    'F5': 0x60, 'F6': 0x61, 'F7': 0x62, 'F3': 0x63, 'F8': 0x64, 'F9': 0x65, 'F11': 0x67,
+    'F13': 0x69, 'SYSRQ': 0x69, 'PRINT': 0x69, 'F16': 0x6A, 'F14': 0x6B, 'SCROLLLOCK': 0x6B,
+    'F10': 0x6D, 'F12': 0x6F, 'F15': 0x71, 'PAUSE': 0x71, 'HELP': 0x72, 'INSERT': 0x72,
+    'HOME': 0x73, 'PAGEUP': 0x74, 'DELETE': 0x75, 'F4': 0x76, 'END': 0x77, 'F2': 0x78,
+    'PAGEDOWN': 0x79, 'F1': 0x7A, 'LEFT': 0x7B, 'RIGHT': 0x7C, 'DOWN': 0x7D, 'UP': 0x7E,
+}
+MAC_KEYCODES = {LINUX_KEYS[name]: vk for name, vk in MAC_KEYS.items()}
+
+# CGEventFlags: the generic mask plus the left/right device bit a real keyboard sets
+FLAG_CAPS, FLAG_SHIFT, FLAG_CTRL, FLAG_OPTION, FLAG_CMD = 0x10000, 0x20000, 0x40000, 0x80000, 0x100000
+FLAG_NUMPAD, FLAG_FN = 0x200000, 0x800000
+MAC_MODIFIERS = {               # Linux Alt is Option, Meta (Super) is Command
+    LINUX_KEYS['LEFTSHIFT']: FLAG_SHIFT | 0x02, LINUX_KEYS['RIGHTSHIFT']: FLAG_SHIFT | 0x04,
+    LINUX_KEYS['LEFTCTRL']: FLAG_CTRL | 0x01, LINUX_KEYS['RIGHTCTRL']: FLAG_CTRL | 0x2000,
+    LINUX_KEYS['LEFTALT']: FLAG_OPTION | 0x20, LINUX_KEYS['RIGHTALT']: FLAG_OPTION | 0x40,
+    LINUX_KEYS['LEFTMETA']: FLAG_CMD | 0x08, LINUX_KEYS['RIGHTMETA']: FLAG_CMD | 0x10,
+}
+KEY_CAPSLOCK = LINUX_KEYS['CAPSLOCK']
+# Flags a real Apple keyboard puts on these keys' own events
+MAC_KEY_FLAGS = {}
+for _name in ('UP', 'DOWN', 'LEFT', 'RIGHT'):
+    MAC_KEY_FLAGS[LINUX_KEYS[_name]] = FLAG_NUMPAD | FLAG_FN
+for _name in ('HOME', 'END', 'PAGEUP', 'PAGEDOWN', 'DELETE', 'HELP', 'INSERT', 'SYSRQ', 'PRINT',
+              'SCROLLLOCK', 'PAUSE', *(f'F{n}' for n in range(1, 21))):
+    MAC_KEY_FLAGS[LINUX_KEYS[_name]] = FLAG_FN
+for _name in ('KP0', 'KP1', 'KP2', 'KP3', 'KP4', 'KP5', 'KP6', 'KP7', 'KP8', 'KP9', 'KPDOT',
+              'KPASTERISK', 'KPPLUS', 'KPMINUS', 'KPSLASH', 'KPENTER', 'KPEQUAL', 'NUMLOCK'):
+    MAC_KEY_FLAGS[LINUX_KEYS[_name]] = FLAG_NUMPAD
+
+EVENT_KEY_DOWN, EVENT_KEY_UP, EVENT_FLAGS_CHANGED = 10, 11, 12
+
+
+class QuartzPoster:
+    """Posts keyboard events through CoreGraphics (ctypes, no PyObjC needed)."""
+
+    def __init__(self):
+        import ctypes
+        import ctypes.util
+        from ctypes import c_bool, c_int32, c_int64, c_uint16, c_uint32, c_uint64, c_void_p
+        path = ctypes.util.find_library('ApplicationServices')
+        if not path:
+            raise OSError('the ApplicationServices framework was not found')
+        q = ctypes.CDLL(path)
+        cf = ctypes.CDLL(ctypes.util.find_library('CoreFoundation'))
+        q.AXIsProcessTrusted.restype = c_bool
+        if not q.AXIsProcessTrusted():
+            raise PermissionError('this program is not allowed to control the computer '
+                                  '(System Settings > Privacy & Security > Accessibility)')
+        q.CGEventSourceCreate.restype = c_void_p
+        q.CGEventSourceCreate.argtypes = [c_int32]
+        q.CGEventCreateKeyboardEvent.restype = c_void_p
+        q.CGEventCreateKeyboardEvent.argtypes = [c_void_p, c_uint16, c_bool]
+        q.CGEventSetType.argtypes = [c_void_p, c_uint32]
+        q.CGEventSetFlags.argtypes = [c_void_p, c_uint64]
+        q.CGEventSetIntegerValueField.argtypes = [c_void_p, c_uint32, c_int64]
+        q.CGEventPost.argtypes = [c_uint32, c_void_p]
+        cf.CFRelease.argtypes = [c_void_p]
+        self.q, self.cf = q, cf
+        self.source = q.CGEventSourceCreate(1)      # kCGEventSourceStateHIDSystemState
+
+    def __call__(self, vk, kind, flags, autorepeat=False):
+        q = self.q
+        event = q.CGEventCreateKeyboardEvent(self.source, vk, kind != EVENT_KEY_UP)
+        if not event:
+            return
+        try:
+            if kind == EVENT_FLAGS_CHANGED:
+                q.CGEventSetType(event, EVENT_FLAGS_CHANGED)
+            q.CGEventSetFlags(event, flags)
+            if autorepeat:
+                q.CGEventSetIntegerValueField(event, 8, 1)   # kCGKeyboardEventAutorepeat
+            q.CGEventPost(0, event)                          # kCGHIDEventTap
+        finally:
+            self.cf.CFRelease(event)
+
+
+class MacKeyboard(Keyboard):
+    """Linux key events to macOS ones. Keeps the modifier flags itself (a posted event
+    carries its own flags) and repeats a held key itself (macOS only repeats keys of a
+    real keyboard). CAPS LOCK toggles a caps flag on the events it posts; it does not
+    change the Mac's own Caps Lock state or light."""
+
+    def __init__(self, post=None, repeat_delay=0.5, repeat_rate=25.0, clock=time.monotonic,
+                 log=print):
+        self.post = post or QuartzPoster()
+        self.repeat_delay = repeat_delay
+        self.repeat_interval = 1.0 / repeat_rate if repeat_rate > 0 else None
+        self.clock = clock
+        self.log = log
+        self.held = set()           # Linux codes of the modifiers that are down
+        self.caps = False
+        self.repeat = None          # (linux code, time of the next repeat)
+        self.warned = set()
+
+    def flags(self, code=None):
+        f = FLAG_CAPS if self.caps else 0
+        for mod in self.held:
+            f |= MAC_MODIFIERS[mod]
+        return f | MAC_KEY_FLAGS.get(code, 0)
+
+    def key(self, code, value):
+        vk = MAC_KEYCODES.get(code)
+        if vk is None:
+            if code not in self.warned:
+                self.warned.add(code)
+                self.log(f'KEY_{LINUX_KEY_NAMES.get(code, code)} has no macOS key; ignored')
+            return
+        if code in MAC_MODIFIERS:
+            (self.held.add if value else self.held.discard)(code)
+            self.post(vk, EVENT_FLAGS_CHANGED, self.flags())
+        elif code == KEY_CAPSLOCK:
+            if value:
+                self.caps = not self.caps
+                self.post(vk, EVENT_FLAGS_CHANGED, self.flags())
+        elif value:
+            self.post(vk, EVENT_KEY_DOWN, self.flags(code))
+            if self.repeat_interval:
+                self.repeat = (code, self.clock() + self.repeat_delay)
+        else:
+            self.post(vk, EVENT_KEY_UP, self.flags(code))
+            if self.repeat and self.repeat[0] == code:
+                self.repeat = None
+
+    def next_timeout(self):
+        if not self.repeat:
+            return None
+        return max(0.0, self.repeat[1] - self.clock())
+
+    def tick(self):
+        if not self.repeat:
+            return
+        code, due = self.repeat
+        now = self.clock()
+        if now < due:
+            return
+        self.post(MAC_KEYCODES[code], EVENT_KEY_DOWN, self.flags(code), autorepeat=True)
+        # one repeat per tick: if the loop fell behind, carry on from now, no burst
+        due += self.repeat_interval
+        self.repeat = (code, due if due > now else now + self.repeat_interval)
 
 
 # ---------------------------------------------------------------------------
@@ -666,7 +846,11 @@ def serve(args, keyboard):
 
     try:
         while True:
-            for key, _ in sel.select(timeout=0.5):
+            timeout = 0.5
+            due = keyboard.next_timeout()
+            if due is not None:
+                timeout = min(timeout, due)
+            for key, _ in sel.select(timeout=timeout):
                 if key.fileobj is listener:
                     sock, addr = listener.accept()
                     ip = ipaddress.ip_address(addr[0])
@@ -702,6 +886,7 @@ def serve(args, keyboard):
                     if args.verbose:
                         print('rx', data.hex(' '), flush=True)
                     session.feed(data)
+            keyboard.tick()
             if client:
                 silent = time.monotonic() - last_rx
                 # the C64 sends a heartbeat twice a second; silence means it was reset
@@ -719,7 +904,7 @@ def serve(args, keyboard):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description='Use a C64/C128 running PETSKEY REMOTE as a Linux keyboard.')
+    p = argparse.ArgumentParser(description='Use a C64/C128 running PETSKEY REMOTE as a Linux or macOS keyboard.')
     p.add_argument('--port', type=int, default=DEFAULT_PORT, help=f'TCP port (default {DEFAULT_PORT})')
     p.add_argument('--bind', default='0.0.0.0', help='address to listen on (default all)')
     p.add_argument('--allow', action='append', default=[], metavar='CIDR',
@@ -730,12 +915,17 @@ def main(argv=None):
                    help='force the C64 or C128 keymap instead of taking it from the C64')
     p.add_argument('--keymap', action='append', default=[], metavar='FILE',
                    help='keymap file applied on top of the built-in one (repeatable)')
-    p.add_argument('--name', default='Commodore PETSKEY Remote', help='input device name')
+    p.add_argument('--name', default='Commodore PETSKEY Remote', help='Linux: input device name')
     p.add_argument('--greeting', default='Linked to {hostname}.', metavar='TEXT',
                    help='line shown on the C64 once connected; {hostname} and {machine} are '
                         'filled in, "" shows nothing (default: "Linked to {hostname}.")')
     p.add_argument('--timeout', type=float, default=15, help='drop a silent connection after this many seconds')
-    p.add_argument('--dry-run', action='store_true', help='print key events instead of creating a uinput device')
+    p.add_argument('--repeat-delay', type=float, default=0.5, metavar='SECONDS',
+                   help='macOS: how long a key is held before it repeats (default 0.5)')
+    p.add_argument('--repeat-rate', type=float, default=25, metavar='PER_SECOND',
+                   help='macOS: repeats per second while a key is held, 0 for none (default 25)')
+    p.add_argument('--dry-run', action='store_true',
+                   help='print key events instead of typing them')
     p.add_argument('--verbose', action='store_true', help='print the raw bytes received')
     p.add_argument('--print-keymap', action='store_true', help='print the effective keymap and exit')
     p.add_argument('--list-keys', action='store_true', help='list the C64 and Linux key names and exit')
@@ -771,6 +961,15 @@ def main(argv=None):
 
     if args.dry_run:
         keyboard = PrintKeyboard()
+    elif sys.platform == 'darwin':
+        try:
+            keyboard = MacKeyboard(repeat_delay=args.repeat_delay, repeat_rate=args.repeat_rate,
+                                   log=lambda m: print(m, flush=True))
+        except OSError as e:
+            raise SystemExit(f'cannot post key events: {e}\n'
+                             'Allow the app that runs this program (Terminal, or the python3 '
+                             'a LaunchAgent runs) under System Settings > Privacy & Security > '
+                             'Accessibility, then start it again. See README.md.')
     else:
         try:
             keyboard = UinputKeyboard(args.name)
