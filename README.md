@@ -14,7 +14,7 @@ While it runs, the C64 shows its own keyboard with what every key does on the Li
 | Part | Where | What it does |
 |---|---|---|
 | `c64/petskey.asm` → `build/petskey-remote.d64` | C64 | Scans the keyboard matrix about 120 times a second, sends each press and release of a physical key, and draws the keyboard. It dials the host with `ATDT host:port`. Its settings and keymap are files on the disk. |
-| `host/netkbd_host.py` | Linux (a Raspberry Pi here), or macOS | Accepts the connection and types the keys on a virtual keyboard created through uinput, or through Quartz events on a Mac, using the keymap the C64 sends. It uses only the Python 3 standard library. |
+| `host/netkbd_host.py` | Linux (for example, a Raspberry Pi), or macOS | Accepts the connection and types the keys on a virtual keyboard created through uinput, or through Quartz events on a Mac, using the keymap the C64 sends. It uses only the Python 3 standard library. |
 
 The C64 sends raw key positions, not PETSCII, so every key can be held, released and combined with other keys: Ctrl+C, Alt+Tab, Shift+arrows and so on.
 
@@ -22,18 +22,18 @@ The C64 sends raw key positions, not PETSCII, so every key can be held, released
 
 - A C64, or a C128 (it runs in 64 mode and still reads the C128's extra keys)
 - A TeensyROM with Ethernet, acting as a SwiftLink modem at `$DE00`, plus somewhere to keep the settings: the TeensyROM's own vdrive, or a real IEC drive, SD2IEC or Pi1541
-- A Linux machine with `/dev/uinput` and Python 3 (a Raspberry Pi here). Nothing to pip install.
-- A wired link between the two. The examples assume the Pi is the TeensyROM's gateway on 192.168.7.x.
+- A Linux machine with `/dev/uinput` and Python 3 (for example, a Raspberry Pi). Nothing to pip install.
+- A wired link between the two. The examples assume the Linux host is the TeensyROM's gateway on 192.168.7.x.
 
-A proposal for doing without the Pi, with the TeensyROM itself acting as a USB keyboard for a PC or a MiSTer, is in [docs/USB-KEYBOARD.md](docs/USB-KEYBOARD.md).
+A proposal for doing without the Linux host, with the TeensyROM itself acting as a USB keyboard for a PC or a MiSTer, is in [docs/USB-KEYBOARD.md](docs/USB-KEYBOARD.md).
 
 ## Getting it
 
 Download `petskey-remote-<version>.d64`, `netkbd_host.py` and `netkbd.service` from the [latest release](https://github.com/wesbiggs/petskey-remote/releases/latest), or build them yourself (see "Building and testing").
 
-## Setup on the Pi
+## Setup on Linux
 
-1. Copy `host/netkbd_host.py` to the Pi, for example to `/usr/local/bin/netkbd_host.py`, and make it executable.
+1. Copy `host/netkbd_host.py` to the Linux host, for example to `/usr/local/bin/netkbd_host.py`, and make it executable.
 2. Try it without creating a keyboard. It only prints the key events:
    ```
    ./netkbd_host.py --dry-run
@@ -42,7 +42,7 @@ Download `petskey-remote-<version>.d64`, `netkbd_host.py` and `netkbd.service` f
    ```
    sudo ./netkbd_host.py --bind 192.168.7.1
    ```
-   `--bind` takes the Pi's address on the wired side, the one the TeensyROM uses as its gateway. Binding to it keeps the port off your WiFi network. **Anyone who can connect to the port can type on the Pi**, so always use `--bind`, `--allow 192.168.7.0/24`, or both. If you use neither, the program prints a warning. The port is 6526, like the CIA chip; `--port` changes it.
+   `--bind` takes the Linux host's address on the wired side, the one the TeensyROM uses as its gateway. Binding to it keeps the port off your WiFi network. **Anyone who can connect to the port can type on the Linux host**, so always use `--bind`, `--allow 192.168.7.0/24`, or both. If you use neither, the program prints a warning. The port is 6526, like the CIA chip; `--port` changes it.
 4. To start it at boot, copy `host/netkbd.service` to `/etc/systemd/system/`, set the addresses in its `ExecStart` line, then run:
    ```
    sudo systemctl daemon-reload
@@ -64,7 +64,7 @@ sudo usermod -aG input $USER     # then log in again
 
 The same program runs on macOS, with the same options. Instead of creating a keyboard device it posts key events into your logged-in session, so it types into apps but not at the login window. It needs only the Python 3 that comes with the Xcode command line tools, or one from Homebrew.
 
-1. Try it with `--dry-run` as on the Pi.
+1. Try it with `--dry-run` as on Linux.
 2. Run it for real:
    ```
    ./netkbd_host.py --bind 192.168.7.1 --allow 192.168.7.0/24
@@ -99,27 +99,27 @@ The program needs a SwiftLink-compatible modem at `$DE00` and a disk drive for i
 
 Load and run `PETSKEY REMOTE` from the disk.
 
-**First run.** There are no settings yet, so the program sends the init command `atc` to the modem. TeensyROM's reply includes the gateway address, and the program offers that as the host: when the Pi is the C64's gateway, that's the right one. You then confirm or edit three lines, each already filled in. Edit with DEL and accept with RETURN; RUN/STOP quits.
+**First run.** There are no settings yet, so the program sends the init command `atc` to the modem. TeensyROM's reply includes the gateway address, and the program offers that as the host: when the Linux host is the C64's gateway, that's the right one. You then confirm or edit three lines, each already filled in. Edit with DEL and accept with RETURN; RUN/STOP quits.
 
 | Setting | Default | |
 |---|---|---|
 | Modem init command | `atc` | Sent before every dial; the program waits for `OK` or `ERROR`. Leave it empty to send nothing. |
-| Host | the gateway | Name or IP address of the Pi |
+| Host | the gateway | Name or IP address of the Linux host |
 | Port | `6526` | |
 
 The settings are saved to `PETSKEY.CFG` on the disk the program was loaded from.
 
 **Later runs** connect straight away with the saved settings. If there is no connection within 15 seconds, or the modem answers NO ANSWER, BUSY or ERROR, the program shows the settings again. RUN/STOP cancels a dial in progress.
 
-**While connected**, the keyboard belongs to the Pi. The top of the screen shows where it is connected and the last line of text from the host. The host sends "Linked to *hostname*." when the C64 connects; change it with `--greeting`, for example `--greeting "Typing into {hostname}"` (`{hostname}` and `{machine}` are filled in, at most 76 characters, `--greeting ""` for none). **RUN/STOP + RESTORE** hangs up and returns to BASIC. If the connection drops, the program tries again, then shows the settings.
+**While connected**, the keyboard belongs to the Linux host. The top of the screen shows where it is connected and the last line of text from the host. The host sends "Linked to *hostname*." when the C64 connects; change it with `--greeting`, for example `--greeting "Typing into {hostname}"` (`{hostname}` and `{machine}` are filled in, at most 76 characters, `--greeting ""` for none). **RUN/STOP + RESTORE** hangs up and returns to BASIC. If the connection drops, the program tries again, then shows the settings.
 
-If the C64 is reset or switched off while a key is down, the Pi releases every key after 3 seconds without a heartbeat and closes the connection after 15 seconds.
+If the C64 is reset or switched off while a key is down, the Linux host releases every key after 3 seconds without a heartbeat and closes the connection after 15 seconds.
 
 ## Key mapping
 
-The keymap lives on the C64 disk: `PETSKEY.K64` for a C64 keyboard and `PETSKEY.K128` for a C128. It is also built into the program, for when the files are missing. The C64 uses it to draw the legends and sends it to the Pi when it connects, so the screen always matches what the keys do. To make the Pi ignore it and use its own (`--layout`, `--keymap`), start the Pi program with `--host-keymap`.
+The keymap lives on the C64 disk: `PETSKEY.K64` for a C64 keyboard and `PETSKEY.K128` for a C128. It is also built into the program, for when the files are missing. The C64 uses it to draw the legends and sends it to the Linux host when it connects, so the screen always matches what the keys do. To make the Linux host ignore it and use its own (`--layout`, `--keymap`), start the host program with `--host-keymap`.
 
-The default keymap makes each key type what its keycap shows, assuming the Pi uses a **US keyboard layout**. Raspberry Pi OS defaults to a UK layout; to change it, use `raspi-config` → Localisation → Keyboard, or the desktop's keyboard settings. For example, SHIFT+2 types `"`, SHIFT+7 types `'`, and `@`, `*`, `+`, `:` and `=` type themselves.
+The default keymap makes each key type what its keycap shows, assuming the Linux host uses a **US keyboard layout**. Raspberry Pi OS defaults to a UK layout; to change it, use `raspi-config` → Localisation → Keyboard, or the desktop's keyboard settings. For example, SHIFT+2 types `"`, SHIFT+7 types `'`, and `@`, `*`, `+`, `:` and `=` type themselves.
 
 Keys that are not characters:
 
@@ -146,7 +146,7 @@ ASCII characters the C64 has no key for are on shifted keys that type only PETSC
 | SHIFT+@ / SHIFT+* | `{` / `}` |
 | ↑ | `^` |
 
-The C128 keys are all read in 64 mode: ESC, TAB, ALT, the four arrow keys, the numeric keypad, HELP (F9, F11 with SHIFT), LINE FEED (F10, F12 with SHIFT), NO SCROLL (Scroll Lock) and CAPS LOCK. CAPS LOCK is a locking key, so each time it locks or unlocks, the Pi gets one Caps Lock tap. The 40/80 DISPLAY key cannot be read in 64 mode; it is drawn dark.
+The C128 keys are all read in 64 mode: ESC, TAB, ALT, the four arrow keys, the numeric keypad, HELP (F9, F11 with SHIFT), LINE FEED (F10, F12 with SHIFT), NO SCROLL (Scroll Lock) and CAPS LOCK. CAPS LOCK is a locking key, so each time it locks or unlocks, the Linux host gets one Caps Lock tap. The 40/80 DISPLAY key cannot be read in 64 mode; it is drawn dark.
 
 ### Your own keymap
 
@@ -181,7 +181,7 @@ A `SHIFT+` line sets the Linux shift state itself: `SHIFT+7 = KEY_APOSTROPHE` se
 - A joystick in port 2 does nothing while it is idle. Moving it or pressing fire pulls keyboard lines low, so keys held at the same time can read wrong, as in any C64 program that reads the keyboard directly. Joystick port 1 is masked out.
 - The C64 keyboard has no diodes. Some combinations of three or more keys produce ghost keys, as they would on the C64 itself.
 - RESTORE is not a matrix key. Only its press can be detected, so it always arrives as a tap and does not autorepeat.
-- The C64 and the Pi do not share the Caps Lock state.
+- The C64 and the Linux host do not share the Caps Lock state.
 - On a Mac, the program types only into a logged-in session, and only once it has the Accessibility permission. It has been tested on a Mac with a C128; the LaunchAgent has not been tested yet.
 
 ## Protocol
@@ -199,7 +199,7 @@ C64 → host:
 | `$FE` | heartbeat, about twice a second |
 | `$FC` | bye: release everything and ignore input until the next hello |
 
-Key codes: 0–63 are the C64 matrix, column × 8 + row, where the column is the `$DC00` bit driven low and the row is the `$DC01` bit read. 64–87 are the C128 extended keys: 64 + K line × 8 + row, with the K line being the `$D02F` bit. 88 is RESTORE and 89 is the C128 CAPS LOCK. The host ignores anything before a hello, such as the modem's echo of the `ATDT` command. A protocol 1 C64, which sends no keymap, gets the Pi's built-in keymap.
+Key codes: 0–63 are the C64 matrix, column × 8 + row, where the column is the `$DC00` bit driven low and the row is the `$DC01` bit read. 64–87 are the C128 extended keys: 64 + K line × 8 + row, with the K line being the `$D02F` bit. 88 is RESTORE and 89 is the C128 CAPS LOCK. The host ignores anything before a hello, such as the modem's echo of the `ATDT` command. A protocol 1 C64, which sends no keymap, gets the Linux host's built-in keymap.
 
 Host → C64: text, shown on the C64's status line.
 
