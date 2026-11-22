@@ -1,10 +1,12 @@
 # Design note: the TeensyROM as a USB keyboard
 
-Status: design revised, not yet built. Suggested by juararob: plug the TeensyROM straight into a PC or a
+Status: built, host-tested only, not yet tried on hardware. The firmware is on the
+`claude/brave-hypatia-ljyd94` branch of [wesbiggs/TeensyROM](https://github.com/wesbiggs/TeensyROM)
+(`docs/USB_Keyboard.md` there has the usage). Suggested by juararob: plug the TeensyROM straight into a PC or a
 MiSTer and use the C64 as a real keyboard there, with no host process and no network.
 
 ```
- C64/C128 keyboard ──► PETSKEY (USB build) ──► "USB Keyboard" Special IO at $DE00 ──► TeensyROM ──► USB HID keyboard ──► PC / MiSTer
+ C64/C128 keyboard ──► PETSKEY REMOTE ──► "USB Keyboard" Special IO at $DE00 ──► TeensyROM ──► USB HID keyboard ──► PC / MiSTer
 ```
 
 A new Special IO, "USB Keyboard", gives the C64 a few registers in IO1. A program writes "press HID usage
@@ -46,7 +48,7 @@ IO1, `$DE00`–`$DE06`. The other IO1 addresses and all of IO2 are open bus.
 | `$DE00` | press HID usage *n* | status: bit 0 = a USB host has set up the keyboard, bit 1 = event queue full |
 | `$DE01` | release usage *n* | the host's LEDs, as HID sends them: bit 0 Num Lock, 1 Caps Lock, 2 Scroll Lock, 3 Compose, 4 Kana |
 | `$DE02` | any value: release every key | interface version, 1 |
-| `$DE03` | any value: heartbeat | — |
+| `$DE03` | any value: heartbeat | 0 |
 | `$DE04`–`$DE06` | — | `"TRK"`, so a program can tell the registers are there |
 
 * **Usages** are from HID's keyboard page (0x07): `$04` is A, `$28` Enter, `$E0`–`$E7` the modifiers (left
@@ -134,64 +136,64 @@ Still worth building with the BASEPRI patch if it's ready by then, and worth tes
 
 ## Firmware design
 
-### The handler
-
-`IO_Handlers/IOH_UsbKbd.c`, the handler, and `IO_Handlers/UsbKbd.c`, the register block, both only in the
-`--usb-keyboard` build:
+`IO_Handlers/IOH_UsbKbd.c`, only in the `--usb-keyboard` build. Nothing in it knows about C64 keys, keymaps,
+Linux key codes or SHIFT faking, and the SwiftLink is the same as stock: the first version's `ATDT USB`
+changes are reverted.
 
 * **`IOHndlr_UsbKbd`**, "USB Keyboard": `InitHndlr`, `IO1Hndlr` and `PollingHndlr`, no IO2 or ROM handlers.
-  It goes into `enumIOHandlers` and `IOHandler[]` right after `IOH_GeoRAM`, and `LastSelectableIOH` moves to
-  it. Appending after the last selectable handler keeps every stock handler's number, so a Special IO choice
-  saved by the stock firmware means the same thing in this build.
+* **Its number.** It goes *last* in `enumIOHandlers` and `IOHandler[]`, after the CRT handlers, so every
+  stock handler keeps its number. That also makes a downgrade safe: flash a stock image with USB Keyboard
+  still selected, and the stock `IOHandlerInit()` finds the saved number out of range and loads nothing,
+  instead of loading whichever handler has that number in the stock build. In the Settings menu it still
+  comes right after GeoRAM: in this build only, the `rwRegNextIOHndlr` write in `IOH_TeensyROM.c` steps from
+  GeoRAM to it, from it back to None, and the other way round.
 * **`IO1Hndlr`** (bus interrupt): a read answers from values the main loop keeps ready (status, LEDs,
-  version, ID). It does no arithmetic before driving the bus, as `USBMouseIORead()` does. A write takes
-  `DataPortWaitRead()` and stores one (register, byte) pair in a single-producer, single-consumer ring buffer,
-  and stamps the time of the last write. A write to `$DE02` is queued like the others; if the queue is full,
-  it sets a "release all" flag instead.
-* **`PollingHndlr`** (main loop): if the flag is set, it drops everything queued so far and releases every
-  key, so nothing written before the "release all" is applied after it. Then it empties the queue. Each event updates a
-  256-entry count table. The 8-byte report follows from the counts: the modifier byte from `$E0`–`$E7`, then
-  the first six other usages that are held, kept in press order so held keys don't move between slots. After
-  each event that changes the report it calls `usb_keyboard_send()`, so a press and release that both arrive
-  in one poll still reach the host as two reports. It also applies the 3 s silence rule and copies
-  `keyboard_leds` and `usb_configuration` into the read values.
-* **`InitHndlr`**: clears the counts, the queue and the report, and sends one empty report, so switching to
-  the handler, or a TeensyROM reset that re-runs it, never leaves a key down on the PC.
+  version, ID), with no work before driving the bus. A write takes `DataPortWaitRead()`, stamps the time,
+  and stores (register, byte) in a 64-entry single-producer, single-consumer ring. A release-all that finds
+  the ring full sets a flag and records where in the ring it landed.
+* **`PollingHndlr`** (main loop): before each entry it checks the flag, and if it is set, skips the entries
+  written before the release-all and releases everything; entries written after it still apply. Each press
+  or release updates a count per usage; the report is the modifier byte from `$E0`–`$E7` plus the first six
+  held keys in press order, so held keys don't move between slots. Each event that changes the report sends
+  it, so a press and release in one poll reach the host as two reports. With no host, the report is kept
+  and sent once one sets up the keyboard. Then the 3 s silence rule, and the status and LED values.
+* **`InitHndlr`** clears everything and sends one empty report. **`UsbKbd_End()`**, called from
+  `SetUpMainMenuROM()` and before a remote launch, does the same when anything is held, so a C64 reset or
+  a switch back to the menu leaves nothing down on the PC.
 
-Nothing in the firmware knows about C64 keys, keymaps, Linux key codes or SHIFT faking. `UsbKbdKeys.h` and
-this repo's `tools/hid_keytable.py` are no longer needed there (the table moves to the keymap compiler; see
-below). The `ATDT USB` changes to `IOH_Swiftlink.c` and `Swift_ATcommands.c` come out, so the SwiftLink is the
-same as stock.
-
-### Using it
-
-The user flashes the `_usbkbd` image, sets Settings → Special IO to "USB Keyboard", and launches the program.
-A program checks `$DE04`–`$DE06` for `"TRK"` before using the registers, and can show "no USB host" from bit 0
-of `$DE00`.
+Tests: `Source/Teensy/tests/usb-kbd.test.js` (a host harness, like the mouse's).
 
 ## PETSKEY's side
 
-PETSKEY REMOTE gets a second output path. The keyboard scan, the keyboard drawing, the settings and the keymap
-files stay shared. Choosing `USB` as the host picks the register path instead of dialing: it checks for
-`"TRK"`, and says to select the "USB Keyboard" Special IO if it isn't there. Whether that ends up as one
-program or a separate `petskey-usbhid` build depends on how much room the second path takes; one program
-means one disk and the same setup screen for both.
+One program does both. At start it looks at `$DE00`:
 
-* **The translator moves to the 6502.** It is `netkbd_host.py`'s `Translator`: for each key down, pick the
-  plain or SHIFT binding, track which held keys force SHIFT on or off and send the one virtual SHIFT to
-  match, and turn the C128's CAPS LOCK into a tap per change. It writes usages to `$DE00`/`$DE01` instead of
-  sending Linux key events. The firmware's press counts replace the translator's own per-key counts, so the
-  6502 version needs only the list of held keys that override SHIFT, the SHIFT key state, and what each
-  held key pressed (90 bytes). Estimate: a few hundred bytes of code.
-* **The keymap files hold HID usages for this path.** `--compile-keymap --usb` writes the same layout as now
-  (90 keys × plain and SHIFT binding × 2 bytes: flags and a key) with HID usages instead of Linux key codes,
-  using the table in `tools/hid_keytable.py`. A key that has no usage the boot report can carry (LINEFEED,
-  MENU, the media keys, RO) is an error at compile time instead of silently typing nothing. The network path
-  keeps its Linux-code files, so the disk has both, for example `PETSKEY.K64` and `PETSKEY.U64`.
-* **Heartbeat:** PETSKEY's existing twice-a-second timer writes `$DE03` instead of sending `$FE`.
-* **Quitting** (RUN/STOP + RESTORE) writes `$DE02`.
+* `"TRK"` at `$DE04`: the USB Keyboard registers. No settings, no dialing: it draws the keyboard and types.
+  The ACIA is never touched, and RESTORE's NMI handler doesn't read it.
+* Otherwise, the ACIA's control and command registers must read back what it writes to them: a SwiftLink,
+  and everything is as before.
+* Neither: it says so (set Special IO to SwiftLink or USB Keyboard) and returns to BASIC, rather than
+  waiting for a modem that isn't there.
 
-The network path (`netkbd_host.py`, the SwiftLink, protocol 2) doesn't change.
+In USB mode:
+
+* **The translator runs on the 6502.** The key bytes the scan queues (the same protocol stream it sends a
+  host) go through `usb_feed`, a copy of `netkbd_host.py`'s `Translator`: pick the plain or SHIFT binding,
+  track which held keys force SHIFT on or off and send the one virtual left Shift to match, and turn the
+  C128's CAPS LOCK into a tap per change. It writes usages to `$DE00`/`$DE01`. The firmware's press counts
+  replace the translator's own, so the 6502 keeps only what each held key pressed, the keys that override
+  SHIFT in press order, and how many SHIFT keys are down: 270 bytes of buffers, under 600 bytes of code.
+* **The keymap files are unchanged.** They hold Linux key codes; the program has a built-in 256-byte Linux
+  code → HID usage table (`c64/gen/hidtable.inc`, generated by `tools/hid_keytable.py`). A custom keymap
+  works on both paths. Keys with no usage the boot report can carry (LINEFEED, MENU, the media keys, RO)
+  type nothing, and are drawn grey on the on-screen keyboard.
+* **Heartbeat:** the twice-a-second `$FE` becomes a write to `$DE03`. **Quitting** (RUN/STOP + RESTORE)
+  writes `$DE02`.
+* **Status line:** "USB KEYBOARD", and whether a computer has set up the keyboard (bit 0 of `$DE00`).
+
+`test/test_usb_6502.py` (`make test-6502`, needs py65) runs the built program in a 6502 emulator: random key
+sequences through every stock keymap, comparing the keys held after every byte with the host's
+`Translator`, and the start-up detection for all three cases. The network path (`netkbd_host.py`, the
+SwiftLink, protocol 2) doesn't change; `make e2e` still passes in VICE on a C64 and a C128.
 
 ## Behavior differences from the host process
 
@@ -205,14 +207,17 @@ The network path (`netkbd_host.py`, the SwiftLink, protocol 2) doesn't change.
 
 ## Testing
 
-1. **Host-side unit tests in the fork,** like `tests/usb_mouse_harness.cpp`: the register reads, the queue,
-   the counts, the report built from them (modifiers, six slots, press order, a seventh key), "release all"
-   with a full queue, and the silence rule.
-2. **VICE, for PETSKEY's 6502 translator:** a stand-in for the registers in `test/vice_e2e.py` that logs the
-   writes, compared with `netkbd_host.py --dry-run` for the same key sequence, run through the same keymap.
-3. **Descriptors, no keyboard code:** build the new USB type, plug into Windows, macOS and Linux. Check that
-   serial, MIDI and an idle keyboard all enumerate, that `trserial` and the TeensyROM UI still find the
-   port, and that the flash tools work.
+Done (host only):
+
+1. **The firmware's registers:** `usb-kbd.test.js` in the fork: reads, counts, the six slots, press order,
+   a seventh key, invalid usages, release-all (also with a full queue, and landing mid-poll), the silence
+   rule, no USB host, LEDs, teardown.
+2. **PETSKEY's 6502 translator and detection:** `make test-6502`, as above.
+
+Still to do, on a board:
+
+3. **Descriptors:** plug into Windows, macOS and Linux. Check that serial, MIDI and an idle keyboard all
+   enumerate, that `trserial` and the TeensyROM UI still find the port, and that the flash tools work.
 4. **Bus timing:** run Ms. Pac-Man and other cartridge games on the keyboard build with the device port
    plugged in, no typing. Nothing should change from the `USB_MIDI_SERIAL` build. Then run PETSKEY with fast
    typing, and check with `evtest` for dropped or doubled events. teensyrom-snoop's `--isr` late-interrupt
@@ -221,13 +226,7 @@ The network path (`netkbd_host.py`, the SwiftLink, protocol 2) doesn't change.
    layout-dependent keys, CAPS LOCK taps, held SHIFT plus overridden keys (`SHIFT+2` → `"`), and autorepeat
    (the host does it).
 6. **Lifecycle:** quit with RUN/STOP + RESTORE (keys released), reset the C64 with a key held (released
-   within 3 s), unplug and replug USB mid-session, and start PETSKEY with no USB host connected and with
-   another Special IO selected.
+   within 3 s), unplug and replug USB mid-session, start PETSKEY with no USB host connected and with no
+   Special IO selected, and step the Special IO list into and out of USB Keyboard both ways.
 7. **MiSTer:** C64 and Amiga cores and the MiSTer menu (F12 is not on the C64 keyboard: map it, for example
    `SHIFT+RESTORE = KEY_F12`).
-
-## Rough size
-
-Firmware: the handler and register block, perhaps 150 lines, plus the USB type and build flag the fork
-already has. PETSKEY: the register output path and the 6502 translator, a few hundred bytes. Host tools: a
-`--usb` option for the keymap compiler.

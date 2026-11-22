@@ -25,7 +25,7 @@ The C64 sends raw key positions, not PETSCII, so every key can be held, released
 - A Linux machine with `/dev/uinput` and Python 3 (for example, a Raspberry Pi). Nothing to pip install.
 - A wired link between the two. The examples assume the Linux host is the TeensyROM's gateway on 192.168.7.x.
 
-To do without a host process, a special TeensyROM firmware build could make the TeensyROM itself a USB keyboard for a PC or a MiSTer, through a "USB Keyboard" Special IO that any C64 program can use. It is designed but not yet built; see [docs/USB-KEYBOARD.md](docs/USB-KEYBOARD.md).
+To do without a host process or a network, a special TeensyROM firmware build makes the TeensyROM itself a USB keyboard for a PC, a Mac or a MiSTer: set Special IO to **USB Keyboard** and start PETSKEY REMOTE, which finds it on its own. It is not yet tested on hardware; see [docs/USB-KEYBOARD.md](docs/USB-KEYBOARD.md).
 
 ## Getting it
 
@@ -210,6 +210,7 @@ Host → C64: text, shown on the C64's status line.
 ```
 make            # build/petskey-remote.prg and build/petskey-remote.d64; needs ACME 0.97 and Python 3
 make test       # unit tests: the host program, and the build tools (layouts, legends, .d64, the USB key table)
+make test-6502  # the C64 program's USB path in a 6502 emulator (pip install py65)
 make e2e        # end-to-end in VICE, see below
 ```
 
