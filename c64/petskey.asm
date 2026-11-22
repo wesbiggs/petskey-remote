@@ -27,6 +27,14 @@
 ;   (press only: sent as down + up); 89 C128 CAPS LOCK lock state.
 ; Host -> C64: text, shown on the status line.
 ;
+; USB instead of the network: when the TeensyROM's "USB Keyboard" Special IO is at
+; $DE00 (it reads "TRK" at $DE04), the program uses that instead of the SwiftLink
+; and the TeensyROM is a USB keyboard for whatever its micro-USB port is plugged
+; into. There is no host program then, so the C64 does the host's work: the same
+; byte stream goes through usb_feed, a 6502 copy of netkbd_host.py's Translator,
+; which writes HID usage presses and releases to the registers
+; (docs/USB-KEYBOARD.md). The ACIA is never touched in that mode.
+;
 ; RUN/STOP + RESTORE hangs up and returns to BASIC.
 
    !cpu 6510
@@ -76,6 +84,23 @@ SW_CTRL    = $de03
 ST_RXFULL  = %00001000
 ST_TXEMPTY = %00010000
 ST_DCD     = %01000000    ; set = no carrier
+ACIA_CTRL  = %00011111    ; 38400 baud, 8N1
+ACIA_CMD_OFF = %00001011  ; DTR, RTS low/Tx ready, receive interrupt off
+
+; The TeensyROM's "USB Keyboard" Special IO. Its reads have no side effects (an
+; indexed store reads the register before writing it).
+USB_PRESS  = $de00        ; write: press HID usage; read: status
+USB_RELEASE = $de01       ; write: release usage; read: the host's LEDs
+USB_ALLUP  = $de02        ; write: release every key; read: interface version
+USB_HEART  = $de03        ; write: heartbeat (keys held with 3 s of silence are released)
+USB_ID     = $de04        ; read: "TRK"
+USB_ST_HOST = %00000001   ; status: a USB host has set up the keyboard
+USB_ST_FULL = %00000010   ; status: the event queue is full
+HID_LSHIFT = $e1
+BIND_DEFINED = $80        ; keymap binding flags (netkbd_host.py encode_map)
+BIND_SETS_SHIFT = $01
+BIND_SHIFT_ON = $02
+DOWN       = $80          ; down_flags: the key is down; bits 0-1 are its binding's
 
 P_HELLO    = $f0
 P_MAP      = $f1
@@ -156,9 +181,18 @@ BasicEnd
 
 start:
    jsr init_once
-   jsr load_keys
+   jsr detect_io
+   bcc +
+   lda #<msg_no_io
+   ldy #>msg_no_io
+   jmp print
++  jsr load_keys
    jsr prepare_display
-   jsr load_cfg
+   lda usb
+   beq +
+   jsr run_keyboard          ; USB: nothing to dial, and the link can't be lost
+   jmp to_basic
++  jsr load_cfg
    jsr rx_on
 flow:
    lda SW_STAT
@@ -199,6 +233,7 @@ to_basic:
 ; ---------------------------------------------------------------------------
 init_once:
    lda #0
+   sta usb
    sta is128
    sta flags
    sta gwlen
@@ -222,25 +257,6 @@ init_once:
    sta BORDER
    sta BGCOLOR
    jsr print_title
-   ; ACIA: no reset (it would report "no carrier" while TeensyROM is still
-   ; connected), 38400, receive interrupts off until the files are loaded
-   lda #0
-   sta rxhead
-   sta rxtail
-   lda #<nmi_handler
-   sta NMIVEC
-   lda #>nmi_handler
-   sta NMIVEC+1
-   jsr rx_off
-   lda #%00011111
-   sta SW_CTRL
-   ldx #0                    ; drop anything left in the receive register
--  lda SW_STAT
-   and #ST_RXFULL
-   beq +
-   lda SW_DATA
-+  dex
-   bne -
    ; the layout for this keyboard
    lda is128
    beq +
@@ -276,6 +292,55 @@ layout_c128:
    rts
 
 
+; What is at $DE00: the USB Keyboard registers (usb = 1), or a SwiftLink, whose
+; control and command registers read back what was written to them. Carry set if
+; neither: nothing is assumed, since another cartridge may be answering there.
+detect_io:
+   ldx #2
+-  lda USB_ID,x
+   cmp usb_magic,x
+   bne di_acia
+   dex
+   bpl -
+   inc usb
+   lda #<msg_usb_found
+   ldy #>msg_usb_found
+   jsr print
+   jmp di_found
+di_acia:
+   ; ACIA: no reset (it would report "no carrier" while TeensyROM is still
+   ; connected), 38400, receive interrupts off until the files are loaded
+   lda #ACIA_CMD_OFF
+   sta SW_CMD
+   lda #ACIA_CTRL
+   sta SW_CTRL
+   lda SW_CTRL
+   cmp #ACIA_CTRL
+   bne di_none
+   lda SW_CMD
+   cmp #ACIA_CMD_OFF
+   bne di_none
+   ldx #0                    ; drop anything left in the receive register
+-  lda SW_STAT
+   and #ST_RXFULL
+   beq +
+   lda SW_DATA
++  dex
+   bne -
+di_found:
+   lda #0
+   sta rxhead
+   sta rxtail
+   lda #<nmi_handler
+   sta NMIVEC
+   lda #>nmi_handler
+   sta NMIVEC+1
+   clc
+   rts
+di_none:
+   sec
+   rts
+
 ; copy X bytes (1-255) from (ptr) to (ptr2)
 memcpy:
    ldy #0
@@ -289,13 +354,17 @@ memcpy:
 ; Bytes from the modem arrive under NMI (a real SwiftLink, or VICE, does not
 ; wait for the C64 to read each one, TeensyROM does) into rxbuf.
 rx_on:
+   lda usb
+   bne +
    lda #%00001001            ; DTR, RTS low/Tx ready, receive interrupt (NMI) on
    sta SW_CMD
-   rts
++  rts
 rx_off:                      ; during disk access and back in BASIC
-   lda #%00001011
+   lda usb
+   bne +
+   lda #ACIA_CMD_OFF
    sta SW_CMD
-   rts
++  rts
 
 ; next received byte in A, carry set; carry clear if there is none
 get_rx:
@@ -319,6 +388,8 @@ nmi_handler:
    pha
    txa
    pha
+   lda usb                   ; no ACIA: it can only be RESTORE
+   bne +
    lda SW_STAT               ; (reading it also acknowledges the ACIA's interrupt)
    and #ST_RXFULL
    beq +
@@ -923,6 +994,19 @@ print_hostport:
 ; The live part: KERNAL interrupts off, keyboard scanned ~120 times a second,
 ; the keyboard picture on screen. Carry set = RUN/STOP+RESTORE, clear = carrier lost.
 run_keyboard:
+   lda usb
+   beq rk_net
+   jsr usb_begin
+   ldx #0
+-  lda msg_usb_ascii,x
+   sta status_buf,x
+   beq +
+   inx
+   bne -
++  lda #$ff                  ; draw the USB host line on the first tick
+   sta usb_shown
+   jmp rk_status
+rk_net:
    jsr drain_rx              ; whatever the modem said before the host
    lda #P_HELLO
    jsr send_byte_wait
@@ -984,6 +1068,7 @@ run_keyboard:
    inx
    iny
    bne -
+rk_status:
 +  lda #1
    jsr draw_status_buf
    lda #0
@@ -1050,7 +1135,9 @@ main_loop:
    lda #0
    sta restore_flag
    lda stable+7              ; RUN/STOP held too: quit
-   bmi kb_quit
+   bpl ml_restore
+   jmp kb_quit
+ml_restore:
    lda #CODE_RESTORE
    jsr enqueue
    jsr show_key
@@ -1093,6 +1180,10 @@ main_loop:
    jsr draw_status_buf
    lda #0
    sta hostlen
++  lda usb
+   beq +
+   jsr usb_show_host
+   jmp main_loop
 +  lda SW_STAT
    and #ST_DCD
    bne +
@@ -1157,7 +1248,15 @@ wait_tick:
 ; One byte each way if the ACIA is ready. Host text goes to status_buf; a
 ; RETURN marks it ready to show.
 service:
-   jsr get_rx
+   lda usb
+   beq +
+   ldx qtail                 ; USB: the C64 is its own host
+   cpx qhead
+   beq sv_done
+   lda queue,x
+   inc qtail
+   jmp usb_feed
++  jsr get_rx
    bcc +
    jsr host_char
 +  lda SW_STAT
@@ -1169,6 +1268,7 @@ service:
    lda queue,x
    sta SW_DATA
    inc qtail
+sv_done:
 +  rts
 
 host_char:
@@ -1346,6 +1446,263 @@ check_caps:
    jsr enqueue
    jmp show_key
 ++ rts
+
+; ---------------------------------------------------------------------------
+; USB: netkbd_host.py's Translator, writing HID usages to the registers. The
+; TeensyROM counts presses per usage, so two C64 keys on one PC key need no
+; counting here.
+
+; A new session: nothing held on either side.
+usb_begin:
+usb_release_all:
+   lda #0
+   sta USB_ALLUP
+   sta n_over
+   sta sent_shift
+   sta phys_shift
+   ldx #NUM_CODES-1
+-  sta down_flags,x
+   dex
+   bpl -
+   rts
+
+; One byte of the protocol stream (the codes run_keyboard queues).
+usb_feed:
+   cmp #P_HEART
+   bne +
+   sta USB_HEART
+   rts
++  cmp #P_BYE
+   beq usb_release_all
+   cmp #$80
+   bcs +
+   cmp #NUM_CODES
+   bcs uf_done
+   jmp key_down
++  and #$7f
+   cmp #NUM_CODES
+   bcs uf_done
+   jmp key_up
+uf_done:
+   rts
+
+; Linux key A pressed / released: its HID usage, if it has one
+press_key:
+   ldx #0
+   beq +
+release_key:
+   ldx #1
++  tay
+   lda hid_table,y
+   beq +
+   jmp usb_write
++  rts
+
+; Write A to register $DE00+X. The TeensyROM's queue empties within a millisecond
+; or two; a write while it stays full for longer is dropped.
+usb_write:
+   sta uw_val
+   ldy #0
+-  lda USB_PRESS
+   and #USB_ST_FULL
+   beq +
+   dey
+   bne -
++  lda uw_val
+   sta USB_PRESS,x
+   rts
+
+; Binding of key A, plain (bind_plain) or with SHIFT held (bind_shift): flags in
+; A (bit 7 clear: not defined), the Linux key in bkey.
+bind_shift:
+   ldy #2
+   bne +
+bind_plain:
+   ldy #0
++  sty tmp2
+   ldy #0
+   sty ptr2+1
+   asl
+   rol ptr2+1
+   asl
+   rol ptr2+1                ; code * 4
+   ora tmp2
+   clc
+   adc #<(keys_buf+4)
+   sta ptr2
+   lda ptr2+1
+   adc #>(keys_buf+4)
+   sta ptr2+1
+   iny
+   lda (ptr2),y
+   sta bkey
+   dey
+   lda (ptr2),y
+   rts
+
+; Carry set if key A acts as SHIFT: bound to a Linux shift key without forcing
+; the shift state on. It sets the state the SHIFT bindings look at, and is sent
+; as the one virtual left shift.
+is_shift_code:
+   jsr bind_plain
+   bpl +
+   and #BIND_SETS_SHIFT|BIND_SHIFT_ON
+   cmp #BIND_SETS_SHIFT|BIND_SHIFT_ON
+   beq +
+   lda bkey
+   cmp #LINUX_LSHIFT
+   beq ++
+   cmp #LINUX_RSHIFT
+   beq ++
++  clc
+   rts
+++ sec
+   rts
+
+; The shift state the host should see: the newest held key that sets it, else
+; whether a SHIFT key is down.
+sync_shift:
+   ldx n_over
+   beq +
+   ldy overrides-1,x
+   lda down_flags,y
+   and #BIND_SHIFT_ON
+   jmp ++
++  lda phys_shift
+++ beq +
+   lda #1
++  cmp sent_shift
+   beq +++
+   sta sent_shift
+   tay
+   lda #HID_LSHIFT
+   ldx #0
+   cpy #0
+   bne +
+   inx
++  jmp usb_write
++++
+   rts
+
+key_down:
+   sta kcode
+   cmp #CODE_CAPS
+   beq tap_key
+   tax
+   lda down_flags,x
+   bne kd_done
+   lda kcode
+   jsr is_shift_code
+   bcc +
+   ldx kcode
+   lda #DOWN
+   sta down_flags,x
+   lda #0
+   sta down_key,x
+   inc phys_shift
+   jmp sync_shift
++  lda phys_shift
+   beq +
+   lda kcode
+   jsr bind_shift
+   bmi ++
++  lda kcode
+   jsr bind_plain
+   bmi ++
+   lda #0
+   sta bkey
+++ and #BIND_SETS_SHIFT|BIND_SHIFT_ON
+   ora #DOWN
+   ldx kcode
+   sta down_flags,x
+   lda bkey
+   sta down_key,x
+   beq kd_done
+   lda down_flags,x
+   and #BIND_SETS_SHIFT
+   beq +
+   txa
+   ldx n_over
+   sta overrides,x
+   inc n_over
++  jsr sync_shift
+   ldx kcode
+   lda down_key,x
+   jmp press_key
+kd_done:
+   rts
+
+; C128 CAPS LOCK locks: each change of state is one tap of its plain binding
+tap_key:
+   jsr bind_plain
+   bpl +
+   lda bkey
+   beq +
+   jsr press_key
+   lda bkey
+   jmp release_key
++  rts
+
+key_up:
+   sta kcode
+   cmp #CODE_CAPS
+   beq tap_key
+   tax
+   lda down_flags,x
+   beq kd_done               ; held before scanning started, or after a release-all
+   lda #0
+   sta down_flags,x
+   lda kcode
+   jsr is_shift_code
+   bcc +
+   dec phys_shift
+   jmp sync_shift
++  ldx kcode
+   lda down_key,x
+   beq ku_sync
+   jsr release_key
+   ldx #0
+-  cpx n_over
+   beq ku_sync
+   lda overrides,x
+   cmp kcode
+   beq +
+   inx
+   bne -
+ku_drop:                     ; drop it, keeping the press order
++  lda overrides+1,x
+   sta overrides,x
+   inx
+   cpx n_over
+   bne ku_drop
+   dec n_over
+ku_sync:
+   jmp sync_shift
+
+; Status line 2: whether a computer has set up the USB keyboard
+usb_show_host:
+   lda USB_PRESS
+   and #USB_ST_HOST
+   cmp usb_shown
+   beq +++
+   sta usb_shown
+   ldx #0
+   tay
+   bne +
+   ldx #msg_nohost_ascii-msg_host_ascii
++  ldy #0
+-  lda msg_host_ascii,x
+   sta status_buf,y
+   beq +
+   inx
+   iny
+   bne -
++  lda #2
+   jsr draw_status_buf
+   lda #0
+   sta status_buf
++++
+   rts
 
 ; ---------------------------------------------------------------------------
 ; Display
@@ -1607,7 +1964,12 @@ draw_key_both:
    iny
    lda (ptr),y               ; Linux key
    beq dk_unused             ; NONE
-   ldy lay_cls,x
+   ldy usb
+   beq +
+   tay
+   lda hid_table,y
+   beq dk_unused             ; nothing over USB
++  ldy lay_cls,x
    lda class_colors,y
    jmp +
 dk_unused:
@@ -2121,6 +2483,15 @@ msg_hangup:
 msg_bye:
    !byte C_GREY
    !pet "Bye.", C_RETURN, 0
+msg_usb_found:
+   !byte C_GREY
+   !pet "USB Keyboard Special IO found.", C_RETURN, C_WHITE, 0
+msg_no_io:
+   !byte C_LTRED
+   !pet "Nothing found at $DE00.", C_RETURN, C_WHITE
+   !pet "On a TeensyROM, set Special IO to", C_RETURN
+   !pet "SwiftLink (network) or USB Keyboard,", C_RETURN
+   !pet "then load PETSKEY Remote again.", C_RETURN, 0
 
 at_dial:     !pet "atdt", 0
 
@@ -2129,6 +2500,9 @@ title64:     !text "PETSKEY REMOTE - C64 KEYBOARD", 0
 title128:    !text "PETSKEY REMOTE - C128 KEYBOARD", 0
 help_ascii:  !text "RUN/STOP+RESTORE: QUIT     HOLD SHIFT: SHIFTED KEYS", 0
 msg_conn_ascii: !text "CONNECTED TO ", 0
+msg_usb_ascii: !text "USB KEYBOARD (TEENSYROM SPECIAL IO)", 0
+msg_host_ascii: !text "A COMPUTER IS CONNECTED TO THE USB PORT", 0
+msg_nohost_ascii: !text "NO COMPUTER ON THE USB PORT YET", 0
 empty_legend: !fill LEGEND_CHARS, 0
 
 ; file names (unshifted PETSCII is ASCII capitals)
@@ -2141,6 +2515,7 @@ fn_cfg_end
 fn_scratch:  !text "S0:PETSKEY.CFG"
 fn_scratch_end
 keys_magic:  !text "PKM", 1
+usb_magic:   !text "TRK"
 cfg_magic:   !text "PKC", 1
 
 cfg_defaults:
@@ -2162,6 +2537,7 @@ row320_hi: !for r, 0, 24 { !byte >(r*320) }
    !src "gen/layout.inc"
    !src "gen/font.inc"
    !src "gen/version.inc"
+   !src "gen/hidtable.inc"
 
 keys_c64:  !binary "gen/PETSKEY.K64", , 2
 keys_c128: !binary "gen/PETSKEY.K128", , 2
@@ -2176,6 +2552,14 @@ cfg_port:     !fill PORTMAX+1, 0
 cfg_end
 
 is128:        !byte 0
+usb:          !byte 0      ; 1: the USB Keyboard registers are at $DE00
+usb_shown:    !byte 0
+uw_val:       !byte 0
+bkey:         !byte 0
+kcode:        !byte 0
+n_over:       !byte 0      ; translator: entries in overrides
+sent_shift:   !byte 0      ;   the shift state the host has
+phys_shift:   !byte 0      ;   SHIFT keys down
 flags:        !byte 0
 dev:          !byte 8
 cfg_ok:       !byte 0
@@ -2266,5 +2650,8 @@ queue      = (end_of_file + 255) & $ff00
 rxbuf      = queue + 256
 canvas     = rxbuf + 256
 keys_buf   = canvas + 512
-end_of_program = keys_buf + KEYS_DATA_SIZE
+down_flags = keys_buf + KEYS_DATA_SIZE   ; per key code: DOWN | its binding's shift bits
+down_key   = down_flags + NUM_CODES      ; per key code: the Linux key it pressed, 0 for none
+overrides  = down_key + NUM_CODES        ; held codes whose binding sets the shift state, in press order
+end_of_program = overrides + NUM_CODES + 1
    !if end_of_program > SCR_S { !error "program overlaps the screens at $8000" }

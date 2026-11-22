@@ -48,10 +48,11 @@ class TableTest(unittest.TestCase):
                         self.assertTrue(table[key], (machine, layout, kind, h.C64_KEYS[code],
                                                      h.LINUX_KEY_NAMES[key]))
 
-    def test_header(self):
-        text = t.header(t.build_table())
-        self.assertIn('UsbKbd_LinuxToHID[256] PROGMEM', text)
-        self.assertEqual(text.count('0x'), 256)
+    def test_acme(self):
+        text = t.acme(t.build_table())
+        self.assertIn('hid_table:', text)
+        self.assertEqual(text.count('$'), 256)
+        self.assertIn('$04', text.splitlines()[3 + K['A'] // 16])
 
 
 if __name__ == '__main__':

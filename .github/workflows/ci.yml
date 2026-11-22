@@ -25,6 +25,12 @@ jobs:
       - name: Build the .prg and .d64
         run: make
 
+      - name: The USB path in a 6502 emulator
+        run: |
+          python3 -m venv /tmp/venv
+          /tmp/venv/bin/pip install py65==1.2.0
+          make test-6502 PYTHON=/tmp/venv/bin/python
+
       - uses: actions/upload-artifact@v4
         with:
           name: petskey-remote-${{ github.sha }}
